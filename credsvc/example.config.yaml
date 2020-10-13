@@ -13,3 +13,11 @@ services:
 
 access_tokens:
   - test_token
+
+# optional ssl support. remove the ssl-section to disable
+#
+# to create a self-signed temporary cert for testing:
+# `openssl req -x509 -newkey rsa:4096 -nodes -keyout key.pem -out cert.pem -days 365 -subj '/CN=localhost'`
+ssl:
+  private_key_pem_file: key.pem
+  certificate_chain_file: cert.pem

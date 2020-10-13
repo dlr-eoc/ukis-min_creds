@@ -37,16 +37,16 @@ class CredentialService:
         self.url = url
         self.token = token
 
-    def list(self):
-        response = requests.get(f"{self.url.rstrip('/')}/", auth=BearerAuth(self.token))
+    def list(self, **requests_kwargs):
+        response = requests.get(f"{self.url.rstrip('/')}/", auth=BearerAuth(self.token), **requests_kwargs)
         response.raise_for_status()
         return response.json()
 
     @contextlib.contextmanager
-    def credential_lease(self, service_name: str, timeout_secs: int = 1000):
+    def credential_lease(self, service_name: str, timeout_secs: int = 1000, **requests_kwargs):
         response = requests.post(f"{self.url.rstrip('/')}/get", json={
             "service": service_name
-        }, timeout=timeout_secs, auth=BearerAuth(self.token))
+        }, timeout=timeout_secs, auth=BearerAuth(self.token), **requests_kwargs)
         response.raise_for_status()
 
         data = response.json()
@@ -57,7 +57,7 @@ class CredentialService:
             # give back the lease to make it avaliable for others
             response = requests.post(f"{self.url.rstrip('/')}/release", json={
                 "lease": data["lease"]
-            }, timeout=timeout_secs, auth=BearerAuth(self.token))
+            }, timeout=timeout_secs, auth=BearerAuth(self.token), **requests_kwargs)
             response.raise_for_status()
 
 

@@ -19,6 +19,7 @@ use chrono::prelude::*;
 use eyre::{Result, WrapErr};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use openssl::ssl::{SslAcceptor, SslMethod, SslFiletype};
 
 mod config;
 
@@ -189,7 +190,7 @@ async fn main() -> Result<()> {
 
     let web_path = cfg.web_path.clone();
     info!("Starting webserver on {} using path {}", cfg.listen_on, cfg.web_path);
-    HttpServer::new(move || {
+    let server = HttpServer::new(move || {
         let auth = HttpAuthentication::bearer(|req, creds| async move {
             let config = req
                 .app_data::<Config>()
@@ -215,11 +216,24 @@ async fn main() -> Result<()> {
                     .route("/get", web::post().to(get_lease))
                     .route("/release", web::post().to(clear_lease))
             )
-    })
-        .bind(cfg.listen_on)?
-        .run()
-        .await
-        .wrap_err_with(|| "failed to run webserver")
+    });
+
+    if let Some(ssl_config) = cfg.ssl {
+        let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls())
+            .wrap_err_with(|| "failed to create ssl builder")?;
+        builder.set_private_key_file(ssl_config.private_key_pem_file, SslFiletype::PEM)
+            .wrap_err_with(|| "reading SSL key failed")?;
+        builder.set_certificate_chain_file(ssl_config.certificate_chain_file)
+            .wrap_err_with(|| "reading certificate failed")?;
+
+        server.bind_openssl(cfg.listen_on, builder)?
+            .run()
+            .await
+    } else {
+        server.bind(cfg.listen_on)?
+            .run()
+            .await
+    }.wrap_err_with(|| "failed to run webserver")
 }
 
 #[derive(Serialize)]

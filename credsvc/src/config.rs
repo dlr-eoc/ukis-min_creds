@@ -29,6 +29,12 @@ pub struct Service {
 }
 
 #[derive(Deserialize, Debug)]
+pub struct SSLConfig {
+    pub private_key_pem_file: String,
+    pub certificate_chain_file: String,
+}
+
+#[derive(Deserialize, Debug)]
 pub struct Config {
     #[serde(default = "default_listen")]
     pub listen_on: String,
@@ -39,6 +45,8 @@ pub struct Config {
     pub services: HashMap<String, Service>,
 
     pub access_tokens: Vec<String>,
+
+    pub ssl: Option<SSLConfig>
 }
 
 impl Default for Config {
@@ -48,6 +56,7 @@ impl Default for Config {
             web_path: default_web_path(),
             services: HashMap::default(),
             access_tokens: vec![],
+            ssl: None
         }
     }
 }
