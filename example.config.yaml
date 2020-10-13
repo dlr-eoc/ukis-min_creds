@@ -1,13 +1,14 @@
 ---
 listen_on: 127.0.0.1:9992
-lease_timeout_secs: 10
-credentials:
+services:
   sentinelhub:
-    - user: user_a
-      password: secret_a
-      num_concurrent: 2
-    - user: user_b
-      password: secret_b
+    lease_timeout_secs: 10
+    credentials:
+      - user: user_a
+        password: secret_a
+        num_concurrent: 2
+      - user: user_b
+        password: secret_b
 
 access_tokens:
   - test_token

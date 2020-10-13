@@ -22,6 +22,13 @@ fn default_lease_timeout_secs() -> u32 { 60 * 5 }
 fn default_web_path() -> String { "/".to_string() }
 
 #[derive(Deserialize, Debug)]
+pub struct Service {
+    #[serde(default = "default_lease_timeout_secs")]
+    pub lease_timeout_secs: u32,
+    pub credentials: Vec<Credential>,
+}
+
+#[derive(Deserialize, Debug)]
 pub struct Config {
     #[serde(default = "default_listen")]
     pub listen_on: String,
@@ -29,9 +36,8 @@ pub struct Config {
     #[serde(default = "default_web_path")]
     pub web_path: String,
 
-    #[serde(default = "default_lease_timeout_secs")]
-    pub lease_timeout_secs: u32,
-    pub credentials: HashMap<String, Vec<Credential>>,
+    pub services: HashMap<String, Service>,
+
     pub access_tokens: Vec<String>,
 }
 
@@ -40,8 +46,7 @@ impl Default for Config {
         Self {
             listen_on: default_listen(),
             web_path: default_web_path(),
-            lease_timeout_secs: default_lease_timeout_secs(),
-            credentials: HashMap::default(),
+            services: HashMap::default(),
             access_tokens: vec![],
         }
     }

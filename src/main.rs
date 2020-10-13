@@ -69,6 +69,7 @@ impl Lease {
 struct ServiceName(String);
 
 struct Service {
+    pub expires_in: chrono::Duration,
     pub leases: HashMap<LeaseId, Lease>,
     pub available_creds: VecDeque<Cred>,
 }
@@ -93,10 +94,10 @@ impl Service {
         n_expired
     }
 
-    fn get_lease(&mut self, expiration_duration: chrono::Duration) -> Option<Lease> {
+    fn get_lease(&mut self) -> Option<Lease> {
         self.clear_expired_leases();
         if let Some(cred) = self.available_creds.pop_front() {
-            let lease = Lease::from_cred(cred, expiration_duration);
+            let lease = Lease::from_cred(cred, self.expires_in);
             self.leases.insert(lease.id.clone(), lease.clone());
             Some(lease)
         } else {
@@ -140,7 +141,6 @@ impl Cleaner {
 }
 
 struct AppState {
-    pub expires_in: chrono::Duration,
     pub services: Arc<Mutex<HashMap<ServiceName, Service>>>,
     pub access_tokens: HashSet<String>,
     pub web_path: String,
@@ -149,11 +149,10 @@ struct AppState {
 impl AppState {
     fn from_cfg(cfg: &config::Config) -> Self {
         Self {
-            expires_in: chrono::Duration::seconds(cfg.lease_timeout_secs as i64),
 
             services: Arc::new(Mutex::new(
-                cfg.credentials.iter().map(|(s_name, credentials)| {
-                    let available_creds = credentials.iter().flat_map(|c| {
+                cfg.services.iter().map(|(s_name, service)| {
+                    let available_creds = service.credentials.iter().flat_map(|c| {
                         (0..(c.num_concurrent)).map(|_| {
                             Cred {
                                 user: c.user.clone(),
@@ -163,6 +162,7 @@ impl AppState {
                     }).collect::<VecDeque<_>>();
 
                     let s = Service {
+                        expires_in: chrono::Duration::seconds(service.lease_timeout_secs as i64),
                         leases: HashMap::default(),
                         available_creds,
                     };
@@ -271,7 +271,7 @@ async fn get_lease(appstate: web::Data<AppState>, get_lease: web::Json<GetLeaseR
         {
             let mut locked = appstate.services.lock().unwrap();
             if let Some(service) = locked.get_mut(&ServiceName(get_lease.service.clone())) {
-                if let Some(lease) = service.get_lease(appstate.expires_in) {
+                if let Some(lease) = service.get_lease() {
                     return Ok(HttpResponse::Ok().json(GetLeaseResponse {
                         lease: lease.id.0,
                         user: lease.user,
