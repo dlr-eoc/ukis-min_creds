@@ -106,6 +106,12 @@ impl Service {
         }
     }
 
+    fn release(&mut self, lease_id : &LeaseId) {
+        if let Some(lease) = self.leases.remove(lease_id) {
+            self.available_creds.push_back(lease.into())
+        }
+    }
+
     fn leases_available(&self) -> usize {
         self.available_creds.len()
     }
@@ -316,11 +322,9 @@ struct ClearLeaseResponse {}
 
 async fn clear_lease(appstate: web::Data<AppState>, clear_lease_req: web::Json<ClearLeaseRequest>) -> actix_web::Result<HttpResponse> {
     let mut locked = appstate.services.lock().unwrap();
+    let lease_id = LeaseId(clear_lease_req.lease.clone());
     for (_, service) in locked.iter_mut() {
-        let lease_opt = service.leases.remove(&LeaseId(clear_lease_req.lease.clone()));
-        if let Some(lease) = lease_opt {
-            service.available_creds.push_back(lease.into())
-        }
+        service.release(&lease_id);
     }
     Ok(HttpResponse::Ok().json(ClearLeaseResponse {}))
 }
