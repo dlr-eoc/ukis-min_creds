@@ -1,26 +1,5 @@
-[package]
-name = "credsvc"
-version = "0.1.0"
-authors = ["Nico Mandery <nico.mandery@dlr.de>"]
-edition = "2018"
+[workspace]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-actix = "^0.10"
-serde = "1"
-argh = "^0.1"
-serde_yaml = "^0.8"
-eyre = "^0.6"
-env_logger = "^0.7"
-log = "^0.4"
-chrono = "^0.4"
-actix-web-httpauth = "^0.5"
-
-[dependencies.uuid]
-version = "^0.5"
-features = ["v4"]
-
-[dependencies.actix-web]
-version = "^3.1"
-default-features = false
+members = [
+    "credsvc"
+]

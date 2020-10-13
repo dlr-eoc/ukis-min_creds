@@ -1,5 +1,6 @@
 ---
-listen_on: 127.0.0.1:9992
+#listen_on: 127.0.0.1:9992
+listen_on: 0.0.0.0:9992
 services:
   sentinelhub:
     lease_timeout_secs: 10
