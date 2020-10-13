@@ -6,7 +6,7 @@ import requests
 from dateutil.parser import parse as dtparse
 
 
-class Credential:
+class CredentialLease:
     user: str
     password: str
     expires_on: datetime
@@ -37,8 +37,13 @@ class CredentialService:
         self.url = url
         self.token = token
 
+    def list(self):
+        response = requests.get(f"{self.url.rstrip('/')}/", auth=BearerAuth(self.token))
+        response.raise_for_status()
+        return response.json()
+
     @contextlib.contextmanager
-    def credential(self, service_name: str, timeout_secs: int = 1000):
+    def credential_lease(self, service_name: str, timeout_secs: int = 1000):
         response = requests.post(f"{self.url.rstrip('/')}/get", json={
             "service": service_name
         }, timeout=timeout_secs, auth=BearerAuth(self.token))
@@ -46,7 +51,7 @@ class CredentialService:
 
         data = response.json()
         try:
-            cred = Credential(data["user"], data["password"], data["expires_on"])
+            cred = CredentialLease(data["user"], data["password"], data["expires_on"])
             yield cred
         finally:
             # give back the lease to make it avaliable for others

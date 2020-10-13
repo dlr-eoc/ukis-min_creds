@@ -303,7 +303,10 @@ struct ClearLeaseResponse {}
 async fn clear_lease(appstate: web::Data<AppState>, clear_lease_req: web::Json<ClearLeaseRequest>) -> actix_web::Result<HttpResponse> {
     let mut locked = appstate.services.lock().unwrap();
     for (_, service) in locked.iter_mut() {
-        service.leases.remove(&LeaseId(clear_lease_req.lease.clone()));
+        let lease_opt = service.leases.remove(&LeaseId(clear_lease_req.lease.clone()));
+        if let Some(lease) = lease_opt {
+            service.available_creds.push_back(lease.into())
+        }
     }
     Ok(HttpResponse::Ok().json(ClearLeaseResponse {}))
 }
