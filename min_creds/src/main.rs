@@ -212,7 +212,7 @@ async fn main() -> Result<()> {
         });
         App::new()
             .app_data(appstate.clone())
-
+            .route(&web_path, web::get().to(overview))
             .service(
                 web::scope(&web_path)
                     .wrap(auth)
@@ -221,7 +221,6 @@ async fn main() -> Result<()> {
                         "Server",
                         format!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION")),
                     ))
-                    .route("", web::get().to(overview))
                     .route("/get", web::post().to(get_lease))
                     .route("/release", web::post().to(clear_lease))
             )
