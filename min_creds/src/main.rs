@@ -17,9 +17,9 @@ use actix_web_httpauth::middleware::HttpAuthentication;
 use argh::FromArgs;
 use chrono::prelude::*;
 use eyre::{Result, WrapErr};
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use openssl::ssl::{SslAcceptor, SslMethod, SslFiletype};
 
 mod config;
 
@@ -106,7 +106,7 @@ impl Service {
         }
     }
 
-    fn release(&mut self, lease_id : &LeaseId) {
+    fn release(&mut self, lease_id: &LeaseId) {
         if let Some(lease) = self.leases.remove(lease_id) {
             self.available_creds.push_back(lease.into())
         }
@@ -150,13 +150,11 @@ impl Cleaner {
 struct AppState {
     pub services: Arc<Mutex<HashMap<ServiceName, Service>>>,
     pub access_tokens: HashSet<String>,
-    pub web_path: String,
 }
 
 impl AppState {
     fn from_cfg(cfg: &config::Config) -> Self {
         Self {
-
             services: Arc::new(Mutex::new(
                 cfg.services.iter().map(|(s_name, service)| {
                     let available_creds = service.credentials.iter().flat_map(|c| {
@@ -178,7 +176,6 @@ impl AppState {
             )),
 
             access_tokens: HashSet::from_iter(cfg.access_tokens.iter().cloned()),
-            web_path: cfg.web_path.clone(),
         }
     }
 }
@@ -187,6 +184,7 @@ impl AppState {
 #[actix_web::main]
 async fn main() -> Result<()> {
     env_logger::init();
+    println!("{} (v{})", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION"));
 
     let main_args: MainArgs = argh::from_env();
     let cfg = config::read_config(main_args.config_file)?;
@@ -200,7 +198,7 @@ async fn main() -> Result<()> {
         let auth = HttpAuthentication::bearer(|req, creds| async move {
             let config = req
                 .app_data::<Config>()
-                .map(|data| data.clone())
+                .cloned()
                 .unwrap_or_else(Default::default);
 
             let appstate = req.app_data::<web::Data<AppState>>()
@@ -214,10 +212,15 @@ async fn main() -> Result<()> {
         });
         App::new()
             .app_data(appstate.clone())
-            .wrap(middleware::Logger::default())
+
             .service(
                 web::scope(&web_path)
                     .wrap(auth)
+                    .wrap(middleware::DefaultHeaders::new().header(
+                        // only visible after successful auth
+                        "Server",
+                        format!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION"))
+                    ))
                     .route("", web::get().to(overview))
                     .route("/get", web::post().to(get_lease))
                     .route("/release", web::post().to(clear_lease))

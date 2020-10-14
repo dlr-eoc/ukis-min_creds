@@ -1,5 +1,5 @@
 [workspace]
 
 members = [
-    "credsvc"
+    "min_creds"
 ]

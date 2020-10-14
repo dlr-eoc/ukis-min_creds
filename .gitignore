@@ -3,3 +3,7 @@
 *.swp
 *.swo
 __pycache__
+Cargo.lock
+/python-client/*.egg-info
+/python-client/dist
+/python-client/build
