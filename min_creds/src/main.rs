@@ -219,7 +219,7 @@ async fn main() -> Result<()> {
                     .wrap(middleware::DefaultHeaders::new().header(
                         // only visible after successful auth
                         "Server",
-                        format!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION"))
+                        format!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION")),
                     ))
                     .route("", web::get().to(overview))
                     .route("/get", web::post().to(get_lease))
@@ -290,11 +290,18 @@ struct GetLeaseResponse {
 }
 
 async fn get_lease(appstate: web::Data<AppState>, get_lease: web::Json<GetLeaseRequest>) -> actix_web::Result<HttpResponse> {
+    let wait_start = Utc::now();
     loop {
-        {
+        { // nested scope for lock release
             let mut locked = appstate.services.lock().unwrap();
             if let Some(service) = locked.get_mut(&ServiceName(get_lease.service.clone())) {
                 if let Some(lease) = service.get_lease() {
+                    let wait_duration = (Utc::now() - wait_start).num_seconds().abs();
+                    if wait_duration > 20 {
+                        warn!("client had to wait {} seconds to obtain credential for {}",
+                              wait_duration, get_lease.service);
+                    }
+
                     return Ok(HttpResponse::Ok().json(GetLeaseResponse {
                         lease: lease.id.0,
                         user: lease.user,
@@ -303,6 +310,7 @@ async fn get_lease(appstate: web::Data<AppState>, get_lease: web::Json<GetLeaseR
                     }));
                 }
             } else {
+                warn!("credential request for unknown service '{}' received", get_lease.service);
                 return Ok(
                     HttpResponse::NotFound()
                         .json(ErrorResponse {
@@ -310,7 +318,8 @@ async fn get_lease(appstate: web::Data<AppState>, get_lease: web::Json<GetLeaseR
                         })
                 );
             }
-        } // releases the lock
+        } // end of scope - releases the lock
+
         delay_for(Duration::from_millis(300)).await
     }
 }
