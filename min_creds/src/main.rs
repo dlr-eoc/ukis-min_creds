@@ -212,15 +212,16 @@ async fn main() -> Result<()> {
         });
         App::new()
             .app_data(appstate.clone())
+            .wrap(middleware::DefaultHeaders::new().header(
+                // on auth-requiring routes the headers are only visible after successful auth
+                "Server",
+                format!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION")),
+            ))
+            .wrap(middleware::Logger::default())
             .route(&web_path, web::get().to(overview))
             .service(
                 web::scope(&web_path)
                     .wrap(auth)
-                    .wrap(middleware::DefaultHeaders::new().header(
-                        // only visible after successful auth
-                        "Server",
-                        format!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION")),
-                    ))
                     .route("/get", web::post().to(get_lease))
                     .route("/release", web::post().to(clear_lease))
             )
