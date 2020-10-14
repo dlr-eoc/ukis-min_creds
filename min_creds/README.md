@@ -8,8 +8,8 @@ Distributes limited pools of credentials across many applications.
 * Simple configuration via one YAML file (see [example.config.yaml](example.config.yaml))
 * Leased credentials expire after a configurable amount of seconds
 * Native SSL
-* Token authentication
-* Easy to deploy - its just one binary
+* Mandatory token authentication
+* Easy to deploy - its just one binary (but it is dynamically linked)
 * Usage gets equally distributed over all credentials of a service
 
 **Missing features:**

@@ -16,7 +16,13 @@ env_logger = "^0.7"
 log = "^0.4"
 chrono = "^0.4"
 actix-web-httpauth = "^0.5"
-openssl = "^0.10"
+
+[dependencies.openssl]
+version = "^0.10"
+# compile in OpenSSL as some of the machines we deploy to
+# have different openssl version than we need
+# (Ubuntu 18.04 vs Centos 7)
+features = ["vendored"]
 
 [dependencies.uuid]
 version = "^0.5"
