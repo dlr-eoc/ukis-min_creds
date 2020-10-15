@@ -6,8 +6,7 @@ use std::iter::FromIterator;
 use std::ops::Add;
 use std::sync::{Arc, Mutex};
 
-use actix::{Actor, AsyncContext, Context};
-use actix::clock::Duration;
+use actix::{Actor, AsyncContext, Context, clock};
 use actix_web::{App, HttpResponse, HttpServer, middleware, web};
 use actix_web::rt::Arbiter;
 use actix_web::rt::time::delay_for;
@@ -20,6 +19,7 @@ use eyre::{Result, WrapErr};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use chrono::Duration;
 
 mod config;
 
@@ -53,15 +53,18 @@ struct Lease {
     pub user: String,
     pub password: String,
     pub expires_on: DateTime<Utc>,
+    pub created_on: DateTime<Utc>
 }
 
 impl Lease {
     fn from_cred(cred: Cred, expiration_duration: chrono::Duration) -> Lease {
+        let now = Utc::now();
         Lease {
             id: LeaseId(Uuid::new_v4().to_string()),
             user: cred.user,
             password: cred.password,
-            expires_on: Utc::now().add(expiration_duration),
+            expires_on: now.add(expiration_duration),
+            created_on: now
         }
     }
 }
@@ -106,9 +109,13 @@ impl Service {
         }
     }
 
-    fn release(&mut self, lease_id: &LeaseId) {
+    fn release(&mut self, lease_id: &LeaseId) -> Option<Duration> {
         if let Some(lease) = self.leases.remove(lease_id) {
-            self.available_creds.push_back(lease.into())
+            let usage_duration = Utc::now() - lease.created_on;
+            self.available_creds.push_back(lease.into());
+            Some(usage_duration)
+        } else {
+            None
         }
     }
 
@@ -129,7 +136,7 @@ impl Actor for Cleaner {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        ctx.run_interval(Duration::new(3, 0), |this, _ctx| {
+        ctx.run_interval(clock::Duration::new(3, 0), |this, _ctx| {
             Arbiter::spawn(Cleaner::clean(this.services.clone()));
         });
     }
@@ -296,10 +303,10 @@ async fn get_lease(appstate: web::Data<AppState>, get_lease: web::Json<GetLeaseR
             let mut locked = appstate.services.lock().unwrap();
             if let Some(service) = locked.get_mut(&ServiceName(get_lease.service.clone())) {
                 if let Some(lease) = service.get_lease() {
-                    let wait_duration = (Utc::now() - wait_start).num_seconds().abs();
-                    if wait_duration > 20 {
-                        warn!("client had to wait {} seconds to obtain credential for {}",
-                              wait_duration, get_lease.service);
+                    let wait_millis = (Utc::now() - wait_start).num_milliseconds().abs() as f64 / 1000.0;
+                    if wait_millis > 10.0 {
+                        warn!("client had to wait {:.3} seconds to obtain credential for {}",
+                              wait_millis, get_lease.service);
                     }
 
                     return Ok(HttpResponse::Ok().json(GetLeaseResponse {
@@ -320,7 +327,7 @@ async fn get_lease(appstate: web::Data<AppState>, get_lease: web::Json<GetLeaseR
             }
         } // end of scope - releases the lock
 
-        delay_for(Duration::from_millis(300)).await
+        delay_for(clock::Duration::from_millis(300)).await
     }
 }
 
@@ -335,8 +342,11 @@ struct ClearLeaseResponse {}
 async fn clear_lease(appstate: web::Data<AppState>, clear_lease_req: web::Json<ClearLeaseRequest>) -> actix_web::Result<HttpResponse> {
     let mut locked = appstate.services.lock().unwrap();
     let lease_id = LeaseId(clear_lease_req.lease.clone());
-    for (_, service) in locked.iter_mut() {
-        service.release(&lease_id);
+    for (service_name, service) in locked.iter_mut() {
+        if let Some(usage_duration) = service.release(&lease_id) {
+            info!("credential for service {} was in use for {:.3} secs", service_name.0, usage_duration.num_milliseconds() as f64 / 1000.0);
+            break
+        }
     }
     Ok(HttpResponse::Ok().json(ClearLeaseResponse {}))
 }
