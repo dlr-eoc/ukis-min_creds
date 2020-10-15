@@ -15,7 +15,7 @@ pub struct Credential {
     pub num_concurrent: u32,
 }
 
-fn default_listen() -> String { "127.0.0.1:7888".to_string() }
+fn default_listen() -> String { "127.0.0.1:9992".to_string() }
 
 fn default_lease_timeout_secs() -> u32 { 60 * 5 }
 
