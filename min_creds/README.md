@@ -1,6 +1,9 @@
 # minimal credential service
 
-Distributes limited pools of credentials across many applications.
+Distributes limited pools of credentials across many applications. The general concept is providing 
+floating credentials with mandatory expiration times to maximize the usage of these credentials.
+
+It is in the responsibility of the client applications to return credentials as soon as possible after use.
 
 **Features:**
 
