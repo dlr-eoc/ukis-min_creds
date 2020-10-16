@@ -2,6 +2,7 @@ import contextlib
 from datetime import datetime, timedelta
 from typing import Union
 import abc
+import sys
 
 import requests
 from dateutil.parser import parse as dtparse
@@ -45,16 +46,36 @@ class CredentialService(AbstractCredentialService):
     url: str
     token: str
     ssl_verify: bool
+    useragent: str
 
-    def __init__(self, url: str, token: str, ssl_verify: bool = True):
+    def __init__(self, url: str, token: str, ssl_verify: bool = True, useragent: str = None):
         self.url = url
         self.token = token
         self.ssl_verify = ssl_verify
+        if useragent is None:
+            try:
+                self.useragent = "/".join(sys.argv[0].split("/")[-2:])
+            except:
+                self.useragent = "unknown"
+        else:
+            self.useragent = useragent
 
     def list(self):
-        response = requests.get(f"{self.url.rstrip('/')}/", auth=BearerAuth(self.token), verify=self.ssl_verify)
+        response = self._request("GET", "/")
         response.raise_for_status()
         return response.json()
+
+    def _request(self, method: str, path: str, **kw):
+        headers = kw.get("headers", {})
+        headers["User-Agent"] = self.useragent
+        kw["headers"] = headers
+        return requests.request(
+            method,
+            f"{self.url.rstrip('/')}{path}",
+            auth=BearerAuth(self.token),
+            verify=self.ssl_verify,
+            **kw
+        )
 
     @contextlib.contextmanager
     def credential_lease(self, service_name: str, timeout_secs: int = 60 * 60 * 10):
@@ -67,9 +88,9 @@ class CredentialService(AbstractCredentialService):
                 a timeout will be raised
         :return:
         """
-        response = requests.post(f"{self.url.rstrip('/')}/get", json={
+        response = self._request("POST", "/get", json={
             "service": service_name
-        }, timeout=timeout_secs, auth=BearerAuth(self.token), verify=self.ssl_verify)
+        }, timeout=timeout_secs)
         response.raise_for_status()
 
         data = response.json()
@@ -78,9 +99,9 @@ class CredentialService(AbstractCredentialService):
             yield cred
         finally:
             # give back the lease to make it avaliable for others
-            response = requests.post(f"{self.url.rstrip('/')}/release", json={
+            response = self._request("POST", "/release", json={
                 "lease": data["lease"]
-            }, auth=BearerAuth(self.token), verify=self.ssl_verify)
+            })
             response.raise_for_status()
 
 

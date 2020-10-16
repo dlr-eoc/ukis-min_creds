@@ -7,14 +7,13 @@ use std::ops::Add;
 use std::sync::{Arc, Mutex};
 
 use actix::{Actor, AsyncContext, clock, Context};
-use actix_web::{App, HttpResponse, HttpServer, middleware, web};
+use actix_web::{App, HttpRequest, HttpResponse, HttpServer, middleware, web};
 use actix_web::rt::Arbiter;
 use actix_web::rt::time::delay_for;
 use actix_web_httpauth::extractors::AuthenticationError;
 use actix_web_httpauth::extractors::bearer::Config;
 use actix_web_httpauth::middleware::HttpAuthentication;
 use argh::FromArgs;
-use chrono::Duration;
 use chrono::prelude::*;
 use eyre::{Result, WrapErr};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
@@ -66,10 +65,11 @@ struct Lease {
     pub password: String,
     pub expires_on: DateTime<Utc>,
     pub created_on: DateTime<Utc>,
+    pub client_name: String,
 }
 
 impl Lease {
-    fn from_cred(cred: Cred, expiration_duration: chrono::Duration) -> Lease {
+    fn from_cred(cred: Cred, expiration_duration: chrono::Duration, client_name: &str) -> Lease {
         let now = Utc::now();
         Lease {
             id: LeaseId::new(),
@@ -77,6 +77,7 @@ impl Lease {
             password: cred.password,
             expires_on: now.add(expiration_duration),
             created_on: now,
+            client_name: client_name.to_string(),
         }
     }
 }
@@ -90,11 +91,17 @@ impl From<String> for ServiceName {
     }
 }
 
+struct LeaseRelease {
+    pub duration: chrono::Duration,
+    pub client_name: String,
+}
+
 struct Service {
     pub expires_in: chrono::Duration,
     pub leases: HashMap<LeaseId, Lease>,
     pub available_creds: VecDeque<Cred>,
 }
+
 
 impl Service {
     fn clear_expired_leases(&mut self) -> usize {
@@ -116,10 +123,10 @@ impl Service {
         n_expired
     }
 
-    fn get_lease(&mut self) -> Option<Lease> {
+    fn get_lease(&mut self, client_name: &str) -> Option<Lease> {
         self.clear_expired_leases();
         if let Some(cred) = self.available_creds.pop_front() {
-            let lease = Lease::from_cred(cred, self.expires_in);
+            let lease = Lease::from_cred(cred, self.expires_in, client_name);
             self.leases.insert(lease.id.clone(), lease.clone());
             Some(lease)
         } else {
@@ -127,11 +134,14 @@ impl Service {
         }
     }
 
-    fn release(&mut self, lease_id: &LeaseId) -> Option<Duration> {
+    fn release(&mut self, lease_id: &LeaseId) -> Option<LeaseRelease> {
         if let Some(lease) = self.leases.remove(lease_id) {
-            let usage_duration = Utc::now() - lease.created_on;
+            let lr = LeaseRelease {
+                duration: Utc::now() - lease.created_on,
+                client_name: lease.client_name.clone()
+            };
             self.available_creds.push_back(lease.into());
-            Some(usage_duration)
+            Some(lr)
         } else {
             None
         }
@@ -314,18 +324,28 @@ struct GetLeaseResponse {
     pub expires_on: String,
 }
 
-async fn get_lease(appstate: web::Data<AppState>, get_lease: web::Json<GetLeaseRequest>) -> actix_web::Result<HttpResponse> {
+async fn get_lease(request: HttpRequest, appstate: web::Data<AppState>, get_lease: web::Json<GetLeaseRequest>) -> actix_web::Result<HttpResponse> {
     let wait_start = Utc::now();
+
+    let useragent = if let Some(ua_header) = request.headers().get("User-Agent") {
+        match ua_header.to_str() {
+            Ok(v) => Some(v.to_string()),
+            Err(_) => None
+        }
+    } else {
+        None
+    }.unwrap_or("??".to_string());
+
     loop {
         { // nested scope for lock release
             let mut locked = appstate.services.lock().unwrap();
             let service_name = ServiceName::from(get_lease.service.clone());
             if let Some(service) = locked.get_mut(&service_name) {
-                if let Some(lease) = service.get_lease() {
+                if let Some(lease) = service.get_lease(&useragent) {
                     let wait_millis = (Utc::now() - wait_start).num_milliseconds().abs() as f64 / 1000.0;
                     if wait_millis > 10.0 {
-                        warn!("client had to wait {:.3} seconds to obtain credential for {}",
-                              wait_millis, service_name.0);
+                        warn!("client '{}' had to wait {:.3} seconds to obtain credential for {}",
+                              lease.client_name, wait_millis, service_name.0);
                     }
 
                     return Ok(HttpResponse::Ok().json(GetLeaseResponse {
@@ -336,7 +356,8 @@ async fn get_lease(appstate: web::Data<AppState>, get_lease: web::Json<GetLeaseR
                     }));
                 }
             } else {
-                warn!("credential request for unknown service '{}' received", get_lease.service);
+                warn!("credential request for unknown service '{}' from client {} received",
+                      get_lease.service, useragent);
                 return Ok(
                     HttpResponse::NotFound()
                         .json(ErrorResponse {
@@ -362,8 +383,9 @@ async fn clear_lease(appstate: web::Data<AppState>, clear_lease_req: web::Json<C
     let mut locked = appstate.services.lock().unwrap();
     let lease_id = LeaseId::from(clear_lease_req.lease.clone());
     for (service_name, service) in locked.iter_mut() {
-        if let Some(usage_duration) = service.release(&lease_id) {
-            info!("credential for service {} was in use for {:.3} secs", service_name.0, usage_duration.num_milliseconds() as f64 / 1000.0);
+        if let Some(release) = service.release(&lease_id) {
+            info!("credential for service {} was in use for {:.3} secs by client '{}'",
+                  service_name.0, release.duration.num_milliseconds() as f64 / 1000.0, release.client_name);
             break;
         }
     }
