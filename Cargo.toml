@@ -3,3 +3,6 @@
 members = [
     "min_creds"
 ]
+
+[profile.release]
+lto = "thin"
