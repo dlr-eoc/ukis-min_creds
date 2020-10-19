@@ -138,7 +138,7 @@ impl Service {
         if let Some(lease) = self.leases.remove(lease_id) {
             let lr = LeaseRelease {
                 duration: Utc::now() - lease.created_on,
-                client_name: lease.client_name.clone()
+                client_name: lease.client_name.clone(),
             };
             self.available_creds.push_back(lease.into());
             Some(lr)
@@ -157,7 +157,7 @@ impl Service {
 }
 
 struct Cleaner {
-    pub services: Arc<Mutex<HashMap<ServiceName, Service>>>
+    pub services: Arc<HashMap<ServiceName, Mutex<Service>>>
 }
 
 impl Actor for Cleaner {
@@ -171,10 +171,10 @@ impl Actor for Cleaner {
 }
 
 impl Cleaner {
-    async fn clean(services: Arc<Mutex<HashMap<ServiceName, Service>>>) {
-        let mut locked = services.lock().unwrap();
-        for (service_name, service) in locked.iter_mut() {
-            let n_expired = service.clear_expired_leases();
+    async fn clean(services: Arc<HashMap<ServiceName, Mutex<Service>>>) {
+        for (service_name, service) in services.iter() {
+            let mut locked = service.lock().unwrap();
+            let n_expired = locked.clear_expired_leases();
             if n_expired > 0 {
                 info!("Cleared {} expired leases for service {}", n_expired, service_name.0)
             }
@@ -183,14 +183,14 @@ impl Cleaner {
 }
 
 struct AppState {
-    pub services: Arc<Mutex<HashMap<ServiceName, Service>>>,
+    pub services: Arc<HashMap<ServiceName, Mutex<Service>>>,
     pub access_tokens: HashSet<String>,
 }
 
 impl AppState {
     fn from_cfg(cfg: &config::Config) -> Self {
         Self {
-            services: Arc::new(Mutex::new(
+            services: Arc::new(
                 cfg.services.iter().map(|(s_name, service)| {
                     let available_creds = service.credentials.iter().flat_map(|c| {
                         (0..(c.num_concurrent)).map(|_| {
@@ -206,9 +206,9 @@ impl AppState {
                         leases: HashMap::default(),
                         available_creds,
                     };
-                    (ServiceName::from(s_name.clone()), s)
+                    (ServiceName::from(s_name.clone()), Mutex::new(s))
                 }).collect::<HashMap<_, _>>()
-            )),
+            ),
 
             access_tokens: HashSet::from_iter(cfg.access_tokens.iter().cloned()),
         }
@@ -223,9 +223,9 @@ async fn main() -> Result<()> {
 
     let main_args: MainArgs = argh::from_env();
     let cfg = config::read_config(main_args.config_file)?;
-    let appstate = web::Data::new(AppState::from_cfg(&cfg));
+    let app_state = web::Data::new(AppState::from_cfg(&cfg));
 
-    Cleaner { services: appstate.services.clone() }.start();
+    Cleaner { services: app_state.services.clone() }.start();
 
     let web_path = cfg.web_path.clone();
     info!("Starting webserver on {} using path {}", cfg.listen_on, cfg.web_path);
@@ -236,17 +236,17 @@ async fn main() -> Result<()> {
                 .cloned()
                 .unwrap_or_else(Default::default);
 
-            let appstate = req.app_data::<web::Data<AppState>>()
-                .expect("could not access appstate");
+            let app_state = req.app_data::<web::Data<AppState>>()
+                .expect("could not access app_state");
             let token = creds.token().to_string();
-            if appstate.access_tokens.contains(&token) {
+            if app_state.access_tokens.contains(&token) {
                 Ok(req)
             } else {
                 Err(AuthenticationError::from(config).into())
             }
         });
         App::new()
-            .app_data(appstate.clone())
+            .app_data(app_state.clone())
             .wrap(middleware::DefaultHeaders::new().header(
                 // on auth-requiring routes the headers are only visible after successful auth
                 "Server",
@@ -291,14 +291,14 @@ struct Overview {
     pub services: HashMap<String, ServiceOverview>
 }
 
-async fn overview(appstate: web::Data<AppState>) -> actix_web::Result<HttpResponse> {
-    let locked = appstate.services.lock().unwrap();
+async fn overview(app_state: web::Data<AppState>) -> actix_web::Result<HttpResponse> {
     Ok(HttpResponse::Ok().json(
         Overview {
-            services: locked.iter().map(|(s_name, s)| {
+            services: app_state.services.iter().map(|(s_name, s)| {
+                let locked_service = s.lock().unwrap();
                 let s_overview = ServiceOverview {
-                    leases_available: s.leases_available(),
-                    leases_in_use: s.leases_in_use(),
+                    leases_available: locked_service.leases_available(),
+                    leases_in_use: locked_service.leases_in_use(),
                 };
                 (s_name.0.clone(), s_overview)
             }).collect()
@@ -324,7 +324,7 @@ struct GetLeaseResponse {
     pub expires_on: String,
 }
 
-async fn get_lease(request: HttpRequest, appstate: web::Data<AppState>, get_lease: web::Json<GetLeaseRequest>) -> actix_web::Result<HttpResponse> {
+async fn get_lease(request: HttpRequest, app_state: web::Data<AppState>, get_lease: web::Json<GetLeaseRequest>) -> actix_web::Result<HttpResponse> {
     let wait_start = Utc::now();
 
     let useragent = if let Some(ua_header) = request.headers().get("User-Agent") {
@@ -334,38 +334,36 @@ async fn get_lease(request: HttpRequest, appstate: web::Data<AppState>, get_leas
         }
     } else {
         None
-    }.unwrap_or("??".to_string());
+    }.unwrap_or_else(|| "<empty user-agent>".to_string());
 
+    let service_name = ServiceName::from(get_lease.service.clone());
     loop {
-        { // nested scope for lock release
-            let mut locked = appstate.services.lock().unwrap();
-            let service_name = ServiceName::from(get_lease.service.clone());
-            if let Some(service) = locked.get_mut(&service_name) {
-                if let Some(lease) = service.get_lease(&useragent) {
-                    let wait_millis = (Utc::now() - wait_start).num_milliseconds().abs() as f64 / 1000.0;
-                    if wait_millis > 10.0 {
-                        warn!("client '{}' had to wait {:.3} seconds to obtain credential for {}",
-                              lease.client_name, wait_millis, service_name.0);
-                    }
-
-                    return Ok(HttpResponse::Ok().json(GetLeaseResponse {
-                        lease: lease.id.0,
-                        user: lease.user,
-                        password: lease.password,
-                        expires_on: lease.expires_on.to_rfc3339(),
-                    }));
+        if let Some(service) = app_state.services.get(&service_name) {
+            let mut locked_service = service.lock().unwrap();
+            if let Some(lease) = locked_service.get_lease(&useragent) {
+                let wait_millis = (Utc::now() - wait_start).num_milliseconds().abs() as f64 / 1000.0;
+                if wait_millis > 10.0 {
+                    warn!("client '{}' had to wait {:.3} seconds to obtain credential for {}",
+                          lease.client_name, wait_millis, service_name.0);
                 }
-            } else {
-                warn!("credential request for unknown service '{}' from client {} received",
-                      get_lease.service, useragent);
-                return Ok(
-                    HttpResponse::NotFound()
-                        .json(ErrorResponse {
-                            message: format!("unknown service \"{}\"", get_lease.service)
-                        })
-                );
+
+                return Ok(HttpResponse::Ok().json(GetLeaseResponse {
+                    lease: lease.id.0,
+                    user: lease.user,
+                    password: lease.password,
+                    expires_on: lease.expires_on.to_rfc3339(),
+                }));
             }
-        } // end of scope - releases the lock
+        } else {
+            warn!("credential request for unknown service '{}' from client {} received",
+                  get_lease.service, useragent);
+            return Ok(
+                HttpResponse::NotFound()
+                    .json(ErrorResponse {
+                        message: format!("unknown service \"{}\"", get_lease.service)
+                    })
+            );
+        }
 
         delay_for(clock::Duration::from_millis(300)).await
     }
@@ -379,11 +377,11 @@ struct ClearLeaseRequest {
 #[derive(Serialize)]
 struct ClearLeaseResponse {}
 
-async fn clear_lease(appstate: web::Data<AppState>, clear_lease_req: web::Json<ClearLeaseRequest>) -> actix_web::Result<HttpResponse> {
-    let mut locked = appstate.services.lock().unwrap();
+async fn clear_lease(app_state: web::Data<AppState>, clear_lease_req: web::Json<ClearLeaseRequest>) -> actix_web::Result<HttpResponse> {
     let lease_id = LeaseId::from(clear_lease_req.lease.clone());
-    for (service_name, service) in locked.iter_mut() {
-        if let Some(release) = service.release(&lease_id) {
+    for (service_name, service) in app_state.services.iter() {
+        let mut locked_service = service.lock().unwrap();
+        if let Some(release) = locked_service.release(&lease_id) {
             info!("credential for service {} was in use for {:.3} secs by client '{}'",
                   service_name.0, release.duration.num_milliseconds() as f64 / 1000.0, release.client_name);
             break;
