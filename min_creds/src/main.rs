@@ -4,7 +4,7 @@ extern crate log;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::iter::FromIterator;
 use std::ops::Add;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use actix::{Actor, AsyncContext, clock, Context};
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, middleware, web};
@@ -18,6 +18,7 @@ use chrono::prelude::*;
 use eyre::{Result, WrapErr};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 mod config;
@@ -173,7 +174,7 @@ impl Actor for Cleaner {
 impl Cleaner {
     async fn clean(services: Arc<HashMap<ServiceName, RwLock<Service>>>) {
         for (service_name, service) in services.iter() {
-            let mut locked = service.write().unwrap();
+            let mut locked = service.write().await;
             let n_expired = locked.clear_expired_leases();
             if n_expired > 0 {
                 info!("Cleared {} expired leases for service {}", n_expired, service_name.0)
@@ -292,18 +293,16 @@ struct Overview {
 }
 
 async fn overview(app_state: web::Data<AppState>) -> actix_web::Result<HttpResponse> {
-    Ok(HttpResponse::Ok().json(
-        Overview {
-            services: app_state.services.iter().map(|(s_name, s)| {
-                let locked_service = s.read().unwrap();
-                let s_overview = ServiceOverview {
-                    leases_available: locked_service.leases_available(),
-                    leases_in_use: locked_service.leases_in_use(),
-                };
-                (s_name.0.clone(), s_overview)
-            }).collect()
-        }
-    ))
+    let mut overview = Overview { services: Default::default() };
+    for (service_name, service) in app_state.services.iter() {
+        let locked_service = service.read().await;
+        let s_overview = ServiceOverview {
+            leases_available: locked_service.leases_available(),
+            leases_in_use: locked_service.leases_in_use(),
+        };
+        overview.services.insert(service_name.0.clone(), s_overview);
+    }
+    Ok(HttpResponse::Ok().json(overview))
 }
 
 #[derive(Serialize)]
@@ -339,7 +338,7 @@ async fn get_lease(request: HttpRequest, app_state: web::Data<AppState>, get_lea
     let service_name = ServiceName::from(get_lease.service.clone());
     loop {
         if let Some(service) = app_state.services.get(&service_name) {
-            let mut locked_service = service.write().unwrap();
+            let mut locked_service = service.write().await;
             if let Some(lease) = locked_service.get_lease(&useragent) {
                 let wait_millis = (Utc::now() - wait_start).num_milliseconds().abs() as f64 / 1000.0;
                 if wait_millis > 10.0 {
@@ -380,7 +379,7 @@ struct ClearLeaseResponse {}
 async fn clear_lease(app_state: web::Data<AppState>, clear_lease_req: web::Json<ClearLeaseRequest>) -> actix_web::Result<HttpResponse> {
     let lease_id = LeaseId::from(clear_lease_req.lease.clone());
     for (service_name, service) in app_state.services.iter() {
-        let mut locked_service = service.write().unwrap();
+        let mut locked_service = service.write().await;
         if let Some(release) = locked_service.release(&lease_id) {
             info!("credential for service {} was in use for {:.3} secs by client '{}'",
                   service_name.0, release.duration.num_milliseconds() as f64 / 1000.0, release.client_name);
