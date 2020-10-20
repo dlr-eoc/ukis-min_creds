@@ -3,7 +3,7 @@ extern crate log;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::iter::FromIterator;
-use std::ops::Add;
+use std::path::Path;
 use std::sync::Arc;
 
 use actix::{Actor, AsyncContext, clock, Context};
@@ -18,143 +18,21 @@ use chrono::prelude::*;
 use eyre::{Result, WrapErr};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use serde::{Deserialize, Serialize};
+use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
-use uuid::Uuid;
+
+use crate::service::{Lease, Service};
+use crate::service::{Cred, LeaseId, ServiceName};
 
 mod config;
+mod service;
 
 #[derive(FromArgs, PartialEq, Debug)]
 /// main arguments
 struct MainArgs {
     #[argh(positional, description = "config file")]
     config_file: String
-}
-
-struct Cred {
-    pub user: String,
-    pub password: String,
-}
-
-impl From<Lease> for Cred {
-    fn from(lease: Lease) -> Self {
-        Self {
-            user: lease.user,
-            password: lease.password,
-        }
-    }
-}
-
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
-struct LeaseId(String);
-
-impl From<String> for LeaseId {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-impl LeaseId {
-    fn new() -> Self {
-        Self(Uuid::new_v4().to_string())
-    }
-}
-
-#[derive(Clone)]
-struct Lease {
-    pub id: LeaseId,
-    pub user: String,
-    pub password: String,
-    pub expires_on: DateTime<Utc>,
-    pub created_on: DateTime<Utc>,
-    pub client_name: String,
-}
-
-impl Lease {
-    fn from_cred(cred: Cred, expiration_duration: chrono::Duration, client_name: &str) -> Lease {
-        let now = Utc::now();
-        Lease {
-            id: LeaseId::new(),
-            user: cred.user,
-            password: cred.password,
-            expires_on: now.add(expiration_duration),
-            created_on: now,
-            client_name: client_name.to_string(),
-        }
-    }
-}
-
-#[derive(Eq, PartialEq, Hash, Debug)]
-struct ServiceName(String);
-
-impl From<String> for ServiceName {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-struct LeaseRelease {
-    pub duration: chrono::Duration,
-    pub client_name: String,
-}
-
-struct Service {
-    pub expires_in: chrono::Duration,
-    pub leases: HashMap<LeaseId, Lease>,
-    pub available_creds: VecDeque<Cred>,
-}
-
-
-impl Service {
-    fn clear_expired_leases(&mut self) -> usize {
-        let now = Utc::now();
-        let mut n_expired = 0_usize;
-
-        let mut leases_to_remove = vec![];
-        for lease_id in self.leases.keys() {
-            if self.leases[lease_id].expires_on < now {
-                leases_to_remove.push(lease_id.clone());
-            }
-        }
-        for lease_id in leases_to_remove {
-            if let Some(lease) = self.leases.remove(&lease_id) {
-                self.available_creds.push_back(lease.into());
-                n_expired += 1
-            }
-        }
-        n_expired
-    }
-
-    fn get_lease(&mut self, client_name: &str) -> Option<Lease> {
-        self.clear_expired_leases();
-        if let Some(cred) = self.available_creds.pop_front() {
-            let lease = Lease::from_cred(cred, self.expires_in, client_name);
-            self.leases.insert(lease.id.clone(), lease.clone());
-            Some(lease)
-        } else {
-            None
-        }
-    }
-
-    fn release(&mut self, lease_id: &LeaseId) -> Option<LeaseRelease> {
-        if let Some(lease) = self.leases.remove(lease_id) {
-            let lr = LeaseRelease {
-                duration: Utc::now() - lease.created_on,
-                client_name: lease.client_name.clone(),
-            };
-            self.available_creds.push_back(lease.into());
-            Some(lr)
-        } else {
-            None
-        }
-    }
-
-    fn leases_available(&self) -> usize {
-        self.available_creds.len()
-    }
-
-    fn leases_in_use(&self) -> usize {
-        self.leases.len()
-    }
 }
 
 struct Cleaner {
@@ -181,6 +59,14 @@ impl Cleaner {
             }
         }
     }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct PersistentLease {
+    pub lease_id: service::LeaseId,
+    pub expiration: service::Expiration,
+    pub client_name: String,
+    pub cred_hash: String,
 }
 
 struct AppState {
@@ -214,6 +100,74 @@ impl AppState {
             access_tokens: HashSet::from_iter(cfg.access_tokens.iter().cloned()),
         }
     }
+
+    async fn persist_leases(&self, leases_path: &Path) -> Result<()> {
+        let mut leases_file = File::create(leases_path).await?;
+
+        let mut leases = HashMap::new();
+        for (service_name, service) in self.services.iter() {
+            let service_locked = service.read().await;
+
+            let mut persistent_leases = vec![];
+            for (lease_id, lease) in service_locked.leases.iter() {
+                let persistent_lease = PersistentLease {
+                    lease_id: lease_id.clone(),
+                    expiration: lease.expiration.clone(),
+                    client_name: lease.client_name.clone(),
+                    cred_hash: Cred::from(lease.clone()).cred_hash(),
+                };
+                persistent_leases.push(persistent_lease);
+            }
+
+            if !persistent_leases.is_empty() {
+                leases.insert(service_name.clone(), persistent_leases);
+            }
+        }
+        let data = serde_yaml::to_string(&leases)?;
+        leases_file.write_all(&data.as_bytes()).await
+            .wrap_err_with(|| "could not write to leases file")
+    }
+
+    async fn load_persistent_leases(&mut self, leases_path: &Path) -> Result<()> {
+        let mut leases_file = File::open(leases_path).await?;
+
+        let mut buf: Vec<u8> = vec![];
+        leases_file.read_to_end(&mut buf).await?;
+
+        let persistent_leases: HashMap<ServiceName, Vec<PersistentLease>> = serde_yaml::from_slice(&buf)?;
+        let now = Utc::now();
+        for (service_name, persistent_leases) in persistent_leases.iter() {
+            if let Some(service) = self.services.get(service_name) {
+                let mut locked_service = service.write().await;
+                let mut cred_hashes = locked_service.available_creds.drain(..)
+                    .map(|cred| (cred.cred_hash(), cred))
+                    .collect::<HashMap<_, _>>();
+
+                for persistent_lease in persistent_leases.iter() {
+                    if persistent_lease.expiration.is_expired(&now) {
+                        continue;
+                    }
+                    if let Some(cred) = cred_hashes.remove(&persistent_lease.cred_hash) {
+                        locked_service.leases.insert(
+                            persistent_lease.lease_id.clone(),
+                            Lease {
+                                id: persistent_lease.lease_id.clone(),
+                                user: cred.user,
+                                password: cred.password,
+                                client_name: persistent_lease.client_name.clone(),
+                                expiration: persistent_lease.expiration.clone(),
+                            },
+                        );
+                    }
+                }
+                for (_, cred) in cred_hashes.drain() {
+                    locked_service.available_creds.push_back(cred);
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 
@@ -224,7 +178,19 @@ async fn main() -> Result<()> {
 
     let main_args: MainArgs = argh::from_env();
     let cfg = config::read_config(main_args.config_file)?;
-    let app_state = web::Data::new(AppState::from_cfg(&cfg));
+    let app_state = {
+        let mut a_state = AppState::from_cfg(&cfg);
+        if let Some(persistent_leases_filename) = &cfg.persistent_leases_filename {
+            match a_state.load_persistent_leases(Path::new(&persistent_leases_filename)).await {
+                Ok(_) => info!("Persistent leases loaded"),
+                Err(e) => warn!("Could not load persistent leases: {}", e.to_string())
+            }
+        }
+
+        web::Data::new(a_state)
+    };
+
+    let app_state_for_save = app_state.clone();
 
     Cleaner { services: app_state.services.clone() }.start();
 
@@ -278,7 +244,14 @@ async fn main() -> Result<()> {
         server.bind(cfg.listen_on)?
             .run()
             .await
-    }.wrap_err_with(|| "failed to run webserver")
+    }.wrap_err_with(|| "failed to run webserver")?;
+
+    // save leases on exit
+    if let Some(persistent_leases_filename) = cfg.persistent_leases_filename {
+        app_state_for_save.persist_leases(Path::new(&persistent_leases_filename)).await?
+    }
+
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -350,7 +323,7 @@ async fn get_lease(request: HttpRequest, app_state: web::Data<AppState>, get_lea
                     lease: lease.id.0,
                     user: lease.user,
                     password: lease.password,
-                    expires_on: lease.expires_on.to_rfc3339(),
+                    expires_on: lease.expiration.expires_on.to_rfc3339(),
                 }));
             }
         } else {

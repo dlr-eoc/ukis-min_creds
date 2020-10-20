@@ -46,7 +46,9 @@ pub struct Config {
 
     pub access_tokens: Vec<String>,
 
-    pub ssl: Option<SSLConfig>
+    pub ssl: Option<SSLConfig>,
+
+    pub persistent_leases_filename: Option<String>,
 }
 
 impl Default for Config {
@@ -56,7 +58,8 @@ impl Default for Config {
             web_path: default_web_path(),
             services: HashMap::default(),
             access_tokens: vec![],
-            ssl: None
+            ssl: None,
+            persistent_leases_filename: None
         }
     }
 }

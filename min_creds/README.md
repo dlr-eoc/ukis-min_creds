@@ -14,10 +14,7 @@ It is in the responsibility of the client applications to return credentials as 
 * Mandatory token authentication
 * Easy to deploy - its just one binary (but it is dynamically linked)
 * Usage gets equally distributed over all credentials of a service
-
-**Missing features:**
-
-* Lease persistence
+* Lease persistence across restarts
 
 **Why this implementation?**
 

@@ -21,3 +21,7 @@ access_tokens:
 ssl:
   private_key_pem_file: key.pem
   certificate_chain_file: cert.pem
+
+# optional filename where the non-expired leases will be saved to during
+# restarts
+persistent_leases_filename: peristent_leases.yaml
