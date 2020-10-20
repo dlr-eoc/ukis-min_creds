@@ -5,7 +5,7 @@ import setuptools
 if __name__ == "__main__":
     setuptools.setup(
         name="min_creds_client",
-        version="0.1.0",
+        version="0.1.1",
         python_requires='>=3.6',
         packages=setuptools.find_packages(),
         install_requires=[

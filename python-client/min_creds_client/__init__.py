@@ -3,6 +3,8 @@ from datetime import datetime, timedelta
 from typing import Union
 import abc
 import sys
+import signal
+import os
 
 import requests
 from dateutil.parser import parse as dtparse
@@ -42,6 +44,55 @@ class AbstractCredentialService(metaclass=abc.ABCMeta):
         yield
 
 
+_SIG_LIST = [signal.SIGINT, signal.SIGTERM, signal.SIGABRT]
+if os.name == "nt":
+    _SIG_LIST.append(signal.SIGBREAK)
+    _SIG_LIST.append(signal.SIGCHLD)
+else:
+    _SIG_LIST.append(signal.SIGHUP)
+
+
+class CredentialLeaseManager:
+    service = None
+    service_name = None
+    timeout_secs: int = None
+    lease_id = None
+
+    def __init__(self, service, service_name: str, timeout_secs: int):
+        self.service = service
+        self.timeout_secs = timeout_secs
+        self.service_name = service_name
+
+        for sig in _SIG_LIST:
+            signal.signal(sig, self._release)
+
+    def _release(self, sig_num, frame):
+        if self.lease_id is not None:
+            # give back the lease to make it avaliable for others
+            response = self.service._request("POST", "/release", json={
+                "lease": self.lease_id
+            })
+            response.raise_for_status()
+            self.lease_id = None
+        if sig_num:
+            raise SystemExit(f"signal {sig_num} received")
+
+    def __enter__(self):
+
+        response = self.service._request("POST", "/get", json={
+            "service": self.service_name
+        }, timeout=self.timeout_secs)
+        response.raise_for_status()
+
+        data = response.json()
+        self.lease_id = data["lease"]
+        cred = CredentialLease(data["user"], data["password"], data["expires_on"])
+        return cred
+
+    def __exit__(self, type, value, traceback):
+        self._release(None, None)
+
+
 class CredentialService(AbstractCredentialService):
     url: str
     token: str
@@ -77,7 +128,6 @@ class CredentialService(AbstractCredentialService):
             **kw
         )
 
-    @contextlib.contextmanager
     def credential_lease(self, service_name: str, timeout_secs: int = 60 * 60 * 10):
         """
         Fetch a credential. In case no free credential is available this method will
@@ -88,21 +138,7 @@ class CredentialService(AbstractCredentialService):
                 a timeout will be raised
         :return:
         """
-        response = self._request("POST", "/get", json={
-            "service": service_name
-        }, timeout=timeout_secs)
-        response.raise_for_status()
-
-        data = response.json()
-        try:
-            cred = CredentialLease(data["user"], data["password"], data["expires_on"])
-            yield cred
-        finally:
-            # give back the lease to make it avaliable for others
-            response = self._request("POST", "/release", json={
-                "lease": data["lease"]
-            })
-            response.raise_for_status()
+        return CredentialLeaseManager(self, service_name, timeout_secs)
 
 
 class MockCredentialService(AbstractCredentialService):
@@ -119,4 +155,3 @@ class MockCredentialService(AbstractCredentialService):
 
     def credential_lease(self, service_name: str, **kw):
         yield CredentialLease(self.user, self.password, expires_on=datetime.now() + timedelta(minutes=10))
-
