@@ -66,5 +66,6 @@ impl Default for Config {
 
 pub fn read_config(filename: String) -> Result<Config> {
     let file = File::open(filename)?;
-    serde_yaml::from_reader(file).wrap_err_with(|| "reading configuration failed")
+    serde_yaml::from_reader(file)
+        .wrap_err_with(|| "reading configuration failed")
 }

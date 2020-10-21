@@ -71,14 +71,17 @@ struct PersistentLease {
 
 struct LockableService {
     service: RwLock<Service>,
-    waiting_arc: Arc<u8>
+
+    /// arc to get the number of waiting tasks by fetching the
+    /// Arc::strong_count()
+    waiting_arc: Arc<u8>,
 }
 
 impl From<Service> for LockableService {
     fn from(s: Service) -> Self {
         Self {
             service: RwLock::new(s),
-            waiting_arc: Arc::new(0)
+            waiting_arc: Arc::new(0),
         }
     }
 }
@@ -107,7 +110,7 @@ impl AppState {
                         leases: HashMap::default(),
                         available_creds,
                     };
-                    (ServiceName::from(s_name.clone()), s.into())
+                    (s_name.clone().into(), s.into())
                 }).collect::<HashMap<_, _>>()
             ),
 
@@ -252,13 +255,12 @@ async fn main() -> Result<()> {
             .wrap_err_with(|| "reading certificate failed")?;
 
         server.bind_openssl(cfg.listen_on, builder)?
-            .run()
-            .await
     } else {
         server.bind(cfg.listen_on)?
-            .run()
-            .await
-    }.wrap_err_with(|| "failed to run webserver")?;
+    }
+        .run()
+        .await
+        .wrap_err_with(|| "failed to run webserver")?;
 
     // save leases on exit
     if let Some(persistent_leases_filename) = cfg.persistent_leases_filename {
@@ -272,7 +274,7 @@ async fn main() -> Result<()> {
 struct ServiceOverview {
     pub credentials_in_use: usize,
     pub credentials_available: usize,
-    pub clients_waiting: usize
+    pub clients_waiting: usize,
 }
 
 #[derive(Serialize)]
@@ -328,17 +330,20 @@ async fn get_lease(request: HttpRequest, app_state: web::Data<AppState>, get_lea
     let mut waiting_arc: Option<Arc<u8>> = None;
     loop {
         if let Some(lockable_service) = app_state.services.get(&service_name) {
-            // get a reference to register as a waiting task
+            // get a reference to register as a waiting task. The referenced value does not matter,
+            // we just use the reference counter, the counter will get decremented once waiting_arc
+            // gets dropped.
             if waiting_arc.is_none() {
                 waiting_arc = Some(lockable_service.waiting_arc.clone());
             }
 
+            // attempt to get a lease
             let mut locked_service = lockable_service.service.write().await;
             if let Some(lease) = locked_service.get_lease(&useragent) {
-                let wait_millis = (Utc::now() - wait_start).num_milliseconds().abs() as f64 / 1000.0;
-                if wait_millis > 10.0 {
+                let wait_secs = (Utc::now() - wait_start).num_milliseconds().abs() as f64 / 1000.0;
+                if wait_secs > 10.0 {
                     warn!("client '{}' had to wait {:.3} seconds to obtain credential for {}",
-                          lease.client_name, wait_millis, service_name.0);
+                          lease.client_name, wait_secs, service_name.0);
                 }
 
                 return Ok(HttpResponse::Ok().json(GetLeaseResponse {
