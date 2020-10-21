@@ -47,9 +47,9 @@ class AbstractCredentialService(metaclass=abc.ABCMeta):
 _SIG_LIST = [signal.SIGINT, signal.SIGTERM, signal.SIGABRT]
 if os.name == "nt":
     _SIG_LIST.append(signal.SIGBREAK)
-    _SIG_LIST.append(signal.SIGCHLD)
 else:
     _SIG_LIST.append(signal.SIGHUP)
+    _SIG_LIST.append(signal.SIGPIPE)
 
 
 class CredentialLeaseManager:
