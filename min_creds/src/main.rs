@@ -4,25 +4,29 @@ extern crate log;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::iter::FromIterator;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll};
 
 use actix::{Actor, AsyncContext, clock, Context};
-use actix_web::{App, HttpRequest, HttpResponse, HttpServer, middleware, web};
+use actix_web::{App, HttpRequest, HttpResponse, HttpServer, middleware, Responder, web};
 use actix_web::rt::Arbiter;
-use actix_web::rt::time::delay_for;
+use actix_web::web::Bytes;
 use actix_web_httpauth::extractors::AuthenticationError;
 use actix_web_httpauth::extractors::bearer::Config;
 use actix_web_httpauth::middleware::HttpAuthentication;
 use argh::FromArgs;
 use chrono::prelude::*;
 use eyre::{Result, WrapErr};
+use futures::Stream;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 
-use crate::service::{Lease, Service};
+use crate::service::{Lease, LeaseRelease, Service};
 use crate::service::{Cred, LeaseId, ServiceName};
 
 mod config;
@@ -36,7 +40,7 @@ struct MainArgs {
 }
 
 struct Cleaner {
-    pub services: Arc<HashMap<ServiceName, LockableService>>
+    pub services: Arc<HashMap<ServiceName, RwLock<ServiceBroker>>>
 }
 
 impl Actor for Cleaner {
@@ -50,10 +54,10 @@ impl Actor for Cleaner {
 }
 
 impl Cleaner {
-    async fn clean(services: Arc<HashMap<ServiceName, LockableService>>) {
-        for (service_name, lockable_service) in services.iter() {
-            let mut locked = lockable_service.service.write().await;
-            let n_expired = locked.clear_expired_leases();
+    async fn clean(services: Arc<HashMap<ServiceName, RwLock<ServiceBroker>>>) {
+        for (service_name, broker_rw) in services.iter() {
+            let mut broker = broker_rw.write().await;
+            let n_expired = broker.clean().await;
             if n_expired > 0 {
                 info!("Cleared {} expired leases for service {}", n_expired, service_name.0)
             }
@@ -69,25 +73,100 @@ struct PersistentLease {
     pub cred_hash: String,
 }
 
-struct LockableService {
-    service: RwLock<Service>,
+
+struct ServiceWaiter {
+    sender: mpsc::Sender<Lease>,
+    client_name: String,
+}
+
+struct LeaseReceiver(mpsc::Receiver<Lease>);
+
+impl Stream for LeaseReceiver {
+    type Item = Result<Bytes, actix_web::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        match Pin::new(&mut self.0).poll_next(cx) {
+            Poll::Ready(Some(lease)) => {
+                let response = GetLeaseResponse::from(lease);
+                let bytes = Bytes::from(serde_json::to_string(&response).unwrap());
+                Poll::Ready(Some(Ok(bytes)))
+            },
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending
+        }
+    }
+}
+
+struct ServiceBroker {
+    service: Service,
 
     /// arc to get the number of waiting tasks by fetching the
     /// Arc::strong_count()
-    waiting_arc: Arc<u8>,
+    waiters: VecDeque<ServiceWaiter>,
 }
 
-impl From<Service> for LockableService {
+impl ServiceBroker {
+    async fn obtain_lease(&mut self, client_name: String) -> LeaseReceiver {
+        let (mut sender, receiver) = mpsc::channel(1);
+
+        let lease_opt = self.service.get_lease(&client_name);
+
+        if let Some(lease) = lease_opt {
+            let lease_id = lease.id.clone();
+            if sender.try_send(lease).is_err() {
+                self.service.release(&lease_id);
+            }
+        } else {
+            self.waiters.push_back(ServiceWaiter {
+                sender,
+                client_name,
+            });
+        }
+        LeaseReceiver(receiver)
+    }
+
+    async fn serve_waiters(&mut self) {
+        while let Some(next_waiter) = self.waiters.front() {
+            if let Some(lease) = self.service.get_lease(&next_waiter.client_name) {
+                let lease_id = lease.id.clone();
+                if let Some(mut waiter) = self.waiters.pop_front() {
+                    if waiter.sender.try_send(lease).is_err() {
+                        // receiver stopped waiting for a credential
+                        self.service.release(&lease_id);
+                    }
+                } else {
+                    self.service.release(&lease_id);
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    async fn clean(&mut self) -> usize {
+        let n_cleared = self.service.clear_expired_leases();
+        self.serve_waiters().await;
+        n_cleared
+    }
+
+    async fn release(&mut self, lease_id: LeaseId) -> Option<LeaseRelease> {
+        let lr = self.service.release(&lease_id);
+        self.serve_waiters().await;
+        lr
+    }
+}
+
+impl From<Service> for ServiceBroker {
     fn from(s: Service) -> Self {
         Self {
-            service: RwLock::new(s),
-            waiting_arc: Arc::new(0),
+            service: s,
+            waiters: VecDeque::new(),
         }
     }
 }
 
 struct AppState {
-    pub services: Arc<HashMap<ServiceName, LockableService>>,
+    pub services: Arc<HashMap<ServiceName, RwLock<ServiceBroker>>>,
     pub access_tokens: HashSet<String>,
 }
 
@@ -110,7 +189,7 @@ impl AppState {
                         leases: HashMap::default(),
                         available_creds,
                     };
-                    (s_name.clone().into(), s.into())
+                    (s_name.clone().into(), RwLock::new(s.into()))
                 }).collect::<HashMap<_, _>>()
             ),
 
@@ -122,11 +201,11 @@ impl AppState {
         let mut leases_file = File::create(leases_path).await?;
 
         let mut leases = HashMap::new();
-        for (service_name, lockable_service) in self.services.iter() {
-            let service_locked = lockable_service.service.read().await;
+        for (service_name, broker_rw) in self.services.iter() {
+            let broker = broker_rw.read().await;
 
             let mut persistent_leases = vec![];
-            for (lease_id, lease) in service_locked.leases.iter() {
+            for (lease_id, lease) in broker.service.leases.iter() {
                 let persistent_lease = PersistentLease {
                     lease_id: lease_id.clone(),
                     expiration: lease.expiration.clone(),
@@ -154,9 +233,9 @@ impl AppState {
         let persistent_leases: HashMap<ServiceName, Vec<PersistentLease>> = serde_yaml::from_slice(&buf)?;
         let now = Utc::now();
         for (service_name, persistent_leases) in persistent_leases.iter() {
-            if let Some(lockable_service) = self.services.get(service_name) {
-                let mut locked_service = lockable_service.service.write().await;
-                let mut cred_hashes = locked_service.available_creds.drain(..)
+            if let Some(broker_rw) = self.services.get(service_name) {
+                let mut broker = broker_rw.write().await;
+                let mut cred_hashes = broker.service.available_creds.drain(..)
                     .map(|cred| (cred.cred_hash(), cred))
                     .collect::<HashMap<_, _>>();
 
@@ -165,7 +244,7 @@ impl AppState {
                         continue;
                     }
                     if let Some(cred) = cred_hashes.remove(&persistent_lease.cred_hash) {
-                        locked_service.leases.insert(
+                        broker.service.leases.insert(
                             persistent_lease.lease_id.clone(),
                             Lease {
                                 id: persistent_lease.lease_id.clone(),
@@ -178,7 +257,7 @@ impl AppState {
                     }
                 }
                 for (_, cred) in cred_hashes.drain() {
-                    locked_service.available_creds.push_back(cred);
+                    broker.service.available_creds.push_back(cred);
                 }
             }
         }
@@ -258,6 +337,7 @@ async fn main() -> Result<()> {
     } else {
         server.bind(cfg.listen_on)?
     }
+        .keep_alive(0)
         .run()
         .await
         .wrap_err_with(|| "failed to run webserver")?;
@@ -284,12 +364,12 @@ struct Overview {
 
 async fn overview(app_state: web::Data<AppState>) -> actix_web::Result<HttpResponse> {
     let mut overview = Overview { services: Default::default() };
-    for (service_name, lockable_service) in app_state.services.iter() {
-        let locked_service = lockable_service.service.read().await;
+    for (service_name, broker_rw) in app_state.services.iter() {
+        let broker = broker_rw.read().await;
         let s_overview = ServiceOverview {
-            credentials_available: locked_service.leases_available(),
-            credentials_in_use: locked_service.leases_in_use(),
-            clients_waiting: Arc::strong_count(&lockable_service.waiting_arc) - 1,
+            credentials_available: broker.service.leases_available(),
+            credentials_in_use: broker.service.leases_in_use(),
+            clients_waiting: broker.waiters.len(),
         };
         overview.services.insert(service_name.0.clone(), s_overview);
     }
@@ -314,9 +394,19 @@ struct GetLeaseResponse {
     pub expires_on: String,
 }
 
-async fn get_lease(request: HttpRequest, app_state: web::Data<AppState>, get_lease: web::Json<GetLeaseRequest>) -> actix_web::Result<HttpResponse> {
-    let wait_start = Utc::now();
+impl From<Lease> for GetLeaseResponse {
+    fn from(lease: Lease) -> Self {
+        Self {
+            lease: lease.id.0,
+            user: lease.user,
+            password: lease.password,
+            expires_on: lease.expiration.expires_on.to_rfc3339(),
+        }
+    }
+}
 
+
+async fn get_lease(request: HttpRequest, app_state: web::Data<AppState>, get_lease: web::Json<GetLeaseRequest>) -> impl Responder {
     let useragent = if let Some(ua_header) = request.headers().get("User-Agent") {
         match ua_header.to_str() {
             Ok(v) => Some(v.to_string()),
@@ -327,44 +417,20 @@ async fn get_lease(request: HttpRequest, app_state: web::Data<AppState>, get_lea
     }.unwrap_or_else(|| "<empty user-agent>".to_string());
 
     let service_name = ServiceName::from(get_lease.service.clone());
-    let mut waiting_arc: Option<Arc<u8>> = None;
-    loop {
-        if let Some(lockable_service) = app_state.services.get(&service_name) {
-            // get a reference to register as a waiting task. The referenced value does not matter,
-            // we just use the reference counter, the counter will get decremented once waiting_arc
-            // gets dropped.
-            if waiting_arc.is_none() {
-                waiting_arc = Some(lockable_service.waiting_arc.clone());
-            }
 
-            // attempt to get a lease
-            let mut locked_service = lockable_service.service.write().await;
-            if let Some(lease) = locked_service.get_lease(&useragent) {
-                let wait_secs = (Utc::now() - wait_start).num_milliseconds().abs() as f64 / 1000.0;
-                if wait_secs > 10.0 {
-                    warn!("client '{}' had to wait {:.3} seconds to obtain credential for {}",
-                          lease.client_name, wait_secs, service_name.0);
-                }
-
-                return Ok(HttpResponse::Ok().json(GetLeaseResponse {
-                    lease: lease.id.0,
-                    user: lease.user,
-                    password: lease.password,
-                    expires_on: lease.expiration.expires_on.to_rfc3339(),
-                }));
-            }
-        } else {
-            warn!("credential request for unknown service '{}' from client {} received",
-                  get_lease.service, useragent);
-            return Ok(
-                HttpResponse::NotFound()
-                    .json(ErrorResponse {
-                        message: format!("unknown service \"{}\"", get_lease.service)
-                    })
-            );
-        }
-
-        delay_for(clock::Duration::from_millis(300)).await
+    if let Some(broker_rw) = app_state.services.get(&service_name) {
+        let mut broker = broker_rw.write().await;
+        let receiver = broker.obtain_lease(useragent.clone()).await;
+        HttpResponse::Ok()
+            .content_type("application/json")
+            .streaming(receiver)
+    } else {
+        warn!("credential request for unknown service '{}' from client {} received",
+              get_lease.service, useragent);
+        HttpResponse::NotFound()
+            .json(ErrorResponse {
+                message: format!("unknown service \"{}\"", get_lease.service)
+            })
     }
 }
 
@@ -378,9 +444,9 @@ struct ClearLeaseResponse {}
 
 async fn clear_lease(app_state: web::Data<AppState>, clear_lease_req: web::Json<ClearLeaseRequest>) -> actix_web::Result<HttpResponse> {
     let lease_id = LeaseId::from(clear_lease_req.lease.clone());
-    for (service_name, lockable_service) in app_state.services.iter() {
-        let mut locked_service = lockable_service.service.write().await;
-        if let Some(release) = locked_service.release(&lease_id) {
+    for (service_name, broker_rw) in app_state.services.iter() {
+        let mut broker = broker_rw.write().await;
+        if let Some(release) = broker.release(lease_id.clone()).await {
             info!("credential for service {} was in use for {:.3} secs by client '{}'",
                   service_name.0, release.duration.num_milliseconds() as f64 / 1000.0, release.client_name);
             break;

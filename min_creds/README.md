@@ -15,6 +15,7 @@ It is in the responsibility of the client applications to return credentials as 
 * Easy to deploy - its just one binary (but it is dynamically linked)
 * Usage gets equally distributed over all credentials of a service
 * Lease persistence across restarts
+* Waiting clients are served in the order of their requests
 
 **Why this implementation?**
 
