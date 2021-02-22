@@ -20,12 +20,16 @@ It is in the responsibility of the client applications to return credentials as 
 
 * [Vault](https://www.vaultproject.io) does not seem to support a limited credential pool.
 
-## Usage ##
+## Installation
+
+
+
+## Usage
 
 Logging can be activated using the `RUST_LOG` environment variable. The levels are `debug`, `error`, `info`,
 `warn`, or `trace`. See the [env_logger docs](https://docs.rs/env_logger/0.6.1/env_logger/#enabling-logging).
 
 
-## REST-API ##
+## REST-API
 
-See the either servers source, or the included [python client implementation](../python-client).
+See either the servers source, or the included [python client implementation](../python-client).

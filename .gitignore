@@ -7,3 +7,5 @@ Cargo.lock
 /python-client/*.egg-info
 /python-client/dist
 /python-client/build
+
+.idea
