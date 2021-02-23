@@ -5,7 +5,11 @@ authors = ["Nico Mandery <nico.mandery@dlr.de>"]
 edition = "2018"
 license = "Apache-2.0"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+# compile in OpenSSL as some of the machines we deploy to
+# have different openssl version than we need
+# (Ubuntu 18.04 vs Centos 7)
+"openssl-static" = [ "openssl/vendored" ]
 
 [dependencies]
 actix = "^0.10"
@@ -27,10 +31,6 @@ features = ["serde"]
 
 [dependencies.openssl]
 version = "^0.10"
-# compile in OpenSSL as some of the machines we deploy to
-# have different openssl version than we need
-# (Ubuntu 18.04 vs Centos 7)
-features = ["vendored"]
 
 [dependencies.uuid]
 version = "^0.5"

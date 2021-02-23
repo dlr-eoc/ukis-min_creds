@@ -20,9 +20,31 @@ It is in the responsibility of the client applications to return credentials as 
 
 * [Vault](https://www.vaultproject.io) does not seem to support a limited credential pool.
 
-## Installation
+## Building
 
+Building this tool requires a recent version of [rust](https://www.rust-lang.org/) and cargo - these can be 
+installed using the [rustup installer](https://rustup.rs/). So far this tool has been only build on linux.
 
+To build the tool clone this repository and just use either the [cargo build](https://doc.rust-lang.org/cargo/commands/cargo-build.html) command
+or directly [cargo install](https://doc.rust-lang.org/cargo/commands/cargo-install.html) which also installs the binary after
+building it.
+
+The `--release` flag takes care of building an optimized binary
+
+```
+cargo build --release
+```
+
+When using `cargo build` the artifact can be found in `target/release`.
+
+### Static linking openssl
+
+To use the binary on systems with a different version of libssl it can be handy to statically link
+against openssl. This can be done by enabling the `openssl-static` feature:
+
+```
+cargo build --release --features openssl-static
+```
 
 ## Usage
 

@@ -1,6 +1,9 @@
 # [![UKIS](https://raw.githubusercontent.com/dlr-eoc/ukis-csmask/main/img/ukis-logo.png)](https://www.dlr.de/eoc/en/desktopdefault.aspx/tabid-5413/10560_read-21914/) ukis-min_creds
 ## minimal credential service and client libraries
 
+Distributes limited pools of credentials across many applications. The general concept is providing
+floating credentials with mandatory expiration times to maximize the usage of these credentials.
+
 [![GitHub license](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 See the sub-projects for more information:
@@ -9,6 +12,8 @@ See the sub-projects for more information:
 
 ## Contributors
 The UKIS team creates and adapts libraries which simplify the usage of satellite data. Our team includes (in alphabetical order):
+
+* Fichtner, Florian
 * Mandery, Nico
 
 German Aerospace Center (DLR)
