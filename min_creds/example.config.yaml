@@ -3,7 +3,7 @@
 listen_on: 0.0.0.0:9992
 services:
   sentinelhub:
-    lease_timeout_secs: 10
+    lease_timeout_secs: 30
     credentials:
       - user: user_a
         password: secret_a

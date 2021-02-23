@@ -14,12 +14,14 @@ license = "Apache-2.0"
 [dependencies]
 actix = "^0.10"
 serde = "1"
+serde_json = "1"
 argh = "^0.1"
 serde_yaml = "^0.8"
 eyre = "^0.6"
 env_logger = "^0.7"
 log = "^0.4"
 actix-web-httpauth = "^0.5"
+futures = "^0.3"
 
 [dependencies.sha1]
 version = "^0.6"
