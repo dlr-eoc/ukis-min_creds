@@ -4,7 +4,9 @@ use std::fs::File;
 use eyre::{Result, WrapErr};
 use serde::Deserialize;
 
-fn default_num_concurrent() -> u32 { 1 }
+fn default_num_concurrent() -> u32 {
+    1
+}
 
 #[derive(Deserialize, Debug)]
 pub struct Credential {
@@ -15,11 +17,17 @@ pub struct Credential {
     pub num_concurrent: u32,
 }
 
-fn default_listen() -> String { "127.0.0.1:9992".to_string() }
+fn default_listen() -> String {
+    "127.0.0.1:9992".to_string()
+}
 
-fn default_lease_timeout_secs() -> u32 { 60 * 5 }
+fn default_lease_timeout_secs() -> u32 {
+    60 * 5
+}
 
-fn default_web_path() -> String { "/".to_string() }
+fn default_web_path() -> String {
+    "/".to_string()
+}
 
 #[derive(Deserialize, Debug)]
 pub struct Service {
@@ -59,13 +67,12 @@ impl Default for Config {
             services: HashMap::default(),
             access_tokens: vec![],
             ssl: None,
-            persistent_leases_filename: None
+            persistent_leases_filename: None,
         }
     }
 }
 
 pub fn read_config(filename: String) -> Result<Config> {
     let file = File::open(filename)?;
-    serde_yaml::from_reader(file)
-        .wrap_err_with(|| "reading configuration failed")
+    serde_yaml::from_reader(file).wrap_err_with(|| "reading configuration failed")
 }

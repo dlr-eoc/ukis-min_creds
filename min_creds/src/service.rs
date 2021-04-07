@@ -2,9 +2,9 @@ use std::collections::{HashMap, VecDeque};
 use std::ops::Add;
 
 use chrono::{DateTime, Utc};
-use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
+use uuid::Uuid;
 
 pub struct Cred {
     pub user: String,
@@ -97,7 +97,6 @@ pub struct Service {
     pub leases: HashMap<LeaseId, Lease>,
     pub available_creds: VecDeque<Cred>,
 }
-
 
 impl Service {
     pub fn clear_expired_leases(&mut self) -> usize {
