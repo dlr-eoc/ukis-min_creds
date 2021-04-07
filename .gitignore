@@ -9,3 +9,5 @@ Cargo.lock
 /python-client/build
 
 .idea
+/min_creds/peristent_leases.yaml
+*.pem
