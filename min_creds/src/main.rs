@@ -349,6 +349,7 @@ struct GetLeaseResponse {
     pub user: String,
     pub password: String,
     pub expires_on: String,
+    pub wait_secs: f64,
 }
 
 async fn get_lease(
@@ -395,6 +396,7 @@ async fn get_lease(
                     user: lease.user,
                     password: lease.password,
                     expires_on: lease.expiration.expires_on.to_rfc3339(),
+                    wait_secs,
                 }));
             }
         } else {

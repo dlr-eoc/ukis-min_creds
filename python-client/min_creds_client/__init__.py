@@ -1,6 +1,6 @@
 import contextlib
 from datetime import datetime, timedelta
-from typing import Union
+from typing import Union, Optional
 import abc
 import sys
 import signal
@@ -14,14 +14,16 @@ class CredentialLease:
     user: str
     password: str
     expires_on: datetime
+    wait_secs: Optional[float]
 
-    def __init__(self, user: str, password: str, expires_on: Union[str, datetime]):
+    def __init__(self, user: str, password: str, expires_on: Union[str, datetime], wait_secs: Optional[float] = None):
         self.user = user
         self.password = password
         if type(expires_on) == str:
             self.expires_on = dtparse(expires_on)
         else:
             self.expires_on = expires_on
+        self.wait_secs = wait_secs
 
 
 class BearerAuth(requests.auth.AuthBase):
@@ -86,7 +88,7 @@ class CredentialLeaseManager:
 
         data = response.json()
         self.lease_id = data["lease"]
-        cred = CredentialLease(data["user"], data["password"], data["expires_on"])
+        cred = CredentialLease(data["user"], data["password"], data["expires_on"], wait_secs=data.get("wait_secs"))
         return cred
 
     def __exit__(self, type, value, traceback):
@@ -154,4 +156,4 @@ class MockCredentialService(AbstractCredentialService):
         return dict()
 
     def credential_lease(self, service_name: str, **kw):
-        yield CredentialLease(self.user, self.password, expires_on=datetime.now() + timedelta(minutes=10))
+        yield CredentialLease(self.user, self.password, expires_on=datetime.now() + timedelta(minutes=10), wait_secs=0.0)
