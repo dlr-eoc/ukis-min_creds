@@ -5,7 +5,7 @@ import setuptools
 if __name__ == "__main__":
     setuptools.setup(
         name="min_creds_client",
-        version="0.1.1",
+        version="0.2.0",
         url="https://github.com/dlr-eoc/ukis-min_creds",
         author="German Aerospace Center (DLR)",
         author_email="ukis-helpdesk@dlr.de",
