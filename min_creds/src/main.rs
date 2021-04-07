@@ -6,7 +6,7 @@ use std::iter::FromIterator;
 use std::path::Path;
 use std::sync::Arc;
 
-use actix::{Actor, AsyncContext, clock, Context};
+use actix::{Actor, AsyncContext, Context};
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, middleware, web};
 use actix_web::rt::Arbiter;
 use actix_web::rt::time::delay_for;
@@ -24,6 +24,7 @@ use tokio::sync::RwLock;
 
 use crate::service::{Lease, Service};
 use crate::service::{Cred, LeaseId, ServiceName};
+use std::time::Duration;
 
 mod config;
 mod service;
@@ -43,7 +44,7 @@ impl Actor for Cleaner {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        ctx.run_interval(clock::Duration::new(3, 0), |this, _ctx| {
+        ctx.run_interval(Duration::new(3, 0), |this, _ctx| {
             Arbiter::spawn(Cleaner::clean(this.services.clone()));
         });
     }
@@ -364,7 +365,7 @@ async fn get_lease(request: HttpRequest, app_state: web::Data<AppState>, get_lea
             );
         }
 
-        delay_for(clock::Duration::from_millis(300)).await
+        delay_for(Duration::from_millis(300)).await
     }
 }
 
