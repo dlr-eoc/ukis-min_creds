@@ -4,7 +4,7 @@
 Distributes limited pools of credentials across many applications. The general concept is providing
 floating credentials with mandatory expiration times to maximize the usage of these credentials.
 
-[![GitHub license](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![GitHub license](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE) [![DOI](https://zenodo.org/badge/341129397.svg)](https://zenodo.org/badge/latestdoi/341129397)
 
 See the sub-projects for more information:
 * [min_creds server](min_creds/README.md)
