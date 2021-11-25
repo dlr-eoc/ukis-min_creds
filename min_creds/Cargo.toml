@@ -9,15 +9,15 @@ license = "Apache-2.0"
 # compile in OpenSSL as some of the machines we deploy to
 # have different openssl version than we need
 # (Ubuntu 18.04 vs Centos 7)
-"openssl-static" = [ "openssl/vendored" ]
+"openssl-static" = ["openssl/vendored"]
 
 [dependencies]
-actix = "^0.10"
+actix = "^0.12"
 serde = "1"
 argh = "^0.1"
 serde_yaml = "^0.8"
 eyre = "^0.6"
-env_logger = "^0.8"
+env_logger = "^0.9"
 log = "^0.4"
 actix-web-httpauth = "^0.5"
 
@@ -42,5 +42,5 @@ default-features = false
 features = ["openssl"]
 
 [dependencies.tokio]
-version = "^0.2"
+version = "^1"
 features = ["sync", "fs"]

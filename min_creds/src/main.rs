@@ -1,24 +1,23 @@
 #[macro_use]
 extern crate log;
 
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::iter::FromIterator;
-use std::path::Path;
-use std::sync::Arc;
-use std::time::Duration;
-
 use actix::{Actor, AsyncContext, Context};
-use actix_web::rt::time::delay_for;
+use actix_web::{App, HttpRequest, HttpResponse, HttpServer, middleware, web};
 use actix_web::rt::Arbiter;
-use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
-use actix_web_httpauth::extractors::bearer::Config;
+use actix_web::rt::time::delay_for;
 use actix_web_httpauth::extractors::AuthenticationError;
+use actix_web_httpauth::extractors::bearer::Config;
 use actix_web_httpauth::middleware::HttpAuthentication;
 use argh::FromArgs;
 use chrono::prelude::*;
 use eyre::{Result, WrapErr};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::iter::FromIterator;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
@@ -155,7 +154,7 @@ impl AppState {
         }
         let data = serde_yaml::to_string(&leases)?;
         leases_file
-            .write_all(&data.as_bytes())
+            .write_all(data.as_bytes())
             .await
             .wrap_err_with(|| "could not write to leases file")
     }
@@ -248,7 +247,7 @@ async fn main() -> Result<()> {
             let config = req
                 .app_data::<Config>()
                 .cloned()
-                .unwrap_or_else(Default::default);
+                .unwrap_or_default();
 
             let app_state = req
                 .app_data::<web::Data<AppState>>()
