@@ -12,17 +12,19 @@ license = "Apache-2.0"
 "openssl-static" = ["openssl/vendored"]
 
 [dependencies]
-actix = "^0.12"
-serde = "1"
 argh = "^0.1"
 serde_yaml = "^0.8"
 eyre = "^0.6"
 env_logger = "^0.9"
 log = "^0.4"
-actix-web-httpauth = "^0.5"
+actix-web-httpauth = "^0.6"
+
+[dependencies.serde]
+version= "1"
+features = ["derive"]
 
 [dependencies.sha1]
-version = "^0.6"
+version = "^0.10"
 features = ["std"]
 
 [dependencies.chrono]
@@ -37,10 +39,10 @@ version = "^0.8"
 features = ["v4"]
 
 [dependencies.actix-web]
-version = "^3.1"
+version = "^4"
 default-features = false
 features = ["openssl"]
 
 [dependencies.tokio]
 version = "^1"
-features = ["sync", "fs"]
+features = ["sync", "fs", "time", "rt-multi-thread", "macros"]

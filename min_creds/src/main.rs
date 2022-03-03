@@ -1,26 +1,25 @@
 #[macro_use]
 extern crate log;
 
-use actix::{Actor, AsyncContext, Context};
-use actix_web::{App, HttpRequest, HttpResponse, HttpServer, middleware, web};
-use actix_web::rt::Arbiter;
-use actix_web::rt::time::delay_for;
-use actix_web_httpauth::extractors::AuthenticationError;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::iter::FromIterator;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
+
+use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
 use actix_web_httpauth::extractors::bearer::Config;
+use actix_web_httpauth::extractors::AuthenticationError;
 use actix_web_httpauth::middleware::HttpAuthentication;
 use argh::FromArgs;
 use chrono::prelude::*;
 use eyre::{Result, WrapErr};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::iter::FromIterator;
-use std::path::Path;
-use std::sync::Arc;
-use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
+use tokio::time;
 
 use crate::service::{Cred, LeaseId, ServiceName};
 use crate::service::{Lease, Service};
@@ -35,22 +34,11 @@ struct MainArgs {
     config_file: String,
 }
 
-struct Cleaner {
-    pub services: Arc<HashMap<ServiceName, LockableService>>,
-}
+async fn clear_expired_leases(services: Arc<HashMap<ServiceName, LockableService>>) {
+    let mut interval = time::interval(Duration::new(2, 0));
 
-impl Actor for Cleaner {
-    type Context = Context<Self>;
-
-    fn started(&mut self, ctx: &mut Self::Context) {
-        ctx.run_interval(Duration::new(3, 0), |this, _ctx| {
-            Arbiter::spawn(Cleaner::clean(this.services.clone()));
-        });
-    }
-}
-
-impl Cleaner {
-    async fn clean(services: Arc<HashMap<ServiceName, LockableService>>) {
+    loop {
+        interval.tick().await;
         for (service_name, lockable_service) in services.iter() {
             let mut locked = lockable_service.service.write().await;
             let n_expired = locked.clear_expired_leases();
@@ -204,7 +192,7 @@ impl AppState {
     }
 }
 
-#[actix_web::main]
+#[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
     println!(
@@ -232,10 +220,10 @@ async fn main() -> Result<()> {
 
     let app_state_for_save = app_state.clone();
 
-    Cleaner {
-        services: app_state.services.clone(),
-    }
-    .start();
+    let _ = {
+        let services = app_state.services.clone();
+        tokio::spawn(async move { clear_expired_leases(services).await })
+    };
 
     let web_path = cfg.web_path.clone();
     info!(
@@ -244,10 +232,7 @@ async fn main() -> Result<()> {
     );
     let server = HttpServer::new(move || {
         let auth = HttpAuthentication::bearer(|req, creds| async move {
-            let config = req
-                .app_data::<Config>()
-                .cloned()
-                .unwrap_or_default();
+            let config = req.app_data::<Config>().cloned().unwrap_or_default();
 
             let app_state = req
                 .app_data::<web::Data<AppState>>()
@@ -261,13 +246,13 @@ async fn main() -> Result<()> {
         });
         App::new()
             .app_data(app_state.clone())
-            .wrap(middleware::DefaultHeaders::new().header(
+            .wrap(middleware::DefaultHeaders::new().add((
                 // on auth-requiring routes the headers are only visible after successful auth
                 "Server",
                 format!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION")),
-            ))
+            )))
             .wrap(middleware::Logger::default())
-            .route(&web_path, web::get().to(overview))
+            .route(format!("{}/", &web_path).as_str(), web::get().to(overview))
             .service(
                 web::scope(&web_path)
                     .wrap(auth)
@@ -408,7 +393,7 @@ async fn get_lease(
             }));
         }
 
-        delay_for(Duration::from_millis(300)).await
+        time::sleep(Duration::from_millis(300)).await
     }
 }
 

@@ -26,7 +26,7 @@ fn default_lease_timeout_secs() -> u32 {
 }
 
 fn default_web_path() -> String {
-    "/".to_string()
+    "".to_string()
 }
 
 #[derive(Deserialize, Debug)]

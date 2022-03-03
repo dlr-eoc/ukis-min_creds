@@ -3,7 +3,7 @@ use std::ops::Add;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sha1::Sha1;
+use sha1::{Digest, Sha1};
 use uuid::Uuid;
 
 pub struct Cred {
@@ -13,7 +13,9 @@ pub struct Cred {
 
 impl Cred {
     pub fn cred_hash(&self) -> String {
-        Sha1::from(format!("{}|{}", self.user, self.password)).hexdigest()
+        let mut hasher = Sha1::new();
+        hasher.update(format!("{}|{}", self.user, self.password));
+        format!("{:x}", hasher.finalize())
     }
 }
 
