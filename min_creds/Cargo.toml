@@ -1,9 +1,10 @@
 [package]
 name = "min_creds"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Nico Mandery <nico.mandery@dlr.de>"]
 edition = "2021"
 license = "Apache-2.0"
+
 
 [features]
 # compile in OpenSSL as some of the machines we deploy to
