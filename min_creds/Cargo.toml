@@ -2,7 +2,7 @@
 name = "min_creds"
 version = "0.3.0"
 authors = ["Nico Mandery <nico.mandery@dlr.de>"]
-edition = "2018"
+edition = "2021"
 license = "Apache-2.0"
 
 [features]
